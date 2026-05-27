@@ -1,0 +1,7 @@
+build/
+InstallArea/
+TEMP/
+sessions/
+.venv/
+__pycache__/
+*.pyc

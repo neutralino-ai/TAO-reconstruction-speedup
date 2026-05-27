@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TAO Reconstruction Speedup — PRD v2</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 900px; margin: 40px auto; padding: 0 20px; line-height: 1.6; color: #1a1a1a; background: #fff; }
+  h1 { border-bottom: 3px solid #2563eb; padding-bottom: 8px; }
+  h2 { border-bottom: 2px solid #e5e7eb; padding-bottom: 6px; margin-top: 32px; color: #1e40af; }
+  h3 { color: #374151; margin-top: 24px; }
+  table { border-collapse: collapse; width: 100%; margin: 16px 0; }
+  th, td { border: 1px solid #d1d5db; padding: 8px 12px; text-align: left; }
+  th { background: #f3f4f6; font-weight: 600; }
+  tr:nth-child(even) { background: #f9fafb; }
+  code { background: #f3f4f6; padding: 2px 6px; border-radius: 4px; font-size: 0.9em; }
+  pre { background: #1e293b; color: #e2e8f0; padding: 16px; border-radius: 8px; overflow-x: auto; font-size: 0.85em; line-height: 1.5; }
+  pre code { background: none; padding: 0; color: inherit; }
+  strong { color: #111827; }
+  blockquote { border-left: 4px solid #2563eb; margin: 16px 0; padding: 4px 16px; background: #f8fafc; }
+  .highlight { background: #fef3c7; padding: 2px 6px; border-radius: 3px; }
+  .step-box { border: 1px solid #e5e7eb; border-radius: 8px; padding: 16px 20px; margin: 16px 0; background: #fafafa; }
+  .step-box h3 { margin-top: 0; }
+  ul.checklist { list-style: none; padding-left: 0; }
+  ul.checklist li { padding: 4px 0; }
+  ul.checklist li::before { content: "☐ "; color: #9ca3af; }
+  ul.checklist li.done::before { content: "☑ "; color: #16a34a; }
+</style>
+</head>
+<body>
+<h1>TAO Reconstruction Speedup — PRD v2</h1>
+
+<h2>1. Context</h2>
+
+<p>TAO reconstruction uses <code>RecQMLEAlg</code> (QMLE = Quasi-Maximum Likelihood Estimation), which is structurally very similar to JUNO's OMILREC:</p>
+
+<table>
+<tr><th>Aspect</th><th>JUNO OMILREC</th><th>TAO RecQMLEAlg</th></tr>
+<tr><td>Detector channels</td><td>~17,613 large PMTs</td><td>8,048 SiPM channels (4,024 SiPMs × 2)</td></tr>
+<tr><td>Fit method</td><td>Minuit2 (QMLE → TMLE → QTMLE → Energy)</td><td>Minuit2 "Simplex" (QMLE only, 4 params: Evis, r, θ, φ)</td></tr>
+<tr><td>FCN</td><td><code>Calculate_EVLikelihood</code> (~470 calls/evt)</td><td><code>QMLERec::QMLE(Evis, r, θ, φ)</code></td></tr>
+<tr><td>Charge model</td><td>Poisson + charge PDF convolution (SPE model)</td><td>Simple Poisson: <code>P(k|λ) = λᵏ e⁻λ / k!</code></td></tr>
+<tr><td>Expected PE</td><td>nPE map (2D interpolation) × lPDE / LPMTCalibEnergy</td><td><code>TH3F::Interpolate(θ_sipm, r, vθ)</code> via ChargeTemplate</td></tr>
+<tr><td>Dark noise</td><td>Per-PMT from calibration DB</td><td>Per-channel DCR × readout window</td></tr>
+<tr><td>Calibration</td><td>OMILRECCalibSvc (nPE maps, time/charge PDFs)</td><td>CalibSvc (DCR, rPDE, bad channels) + CondDB</td></tr>
+<tr><td>Baseline env</td><td>JUNOSW J26.1.1</td><td>JUNOSW J26.1.0 + TAOSW overlay</td></tr>
+<tr><td>Run command</td><td><code>tut_rtraw2rec.py</code></td><td><code>RecQMLEAlg/share/run.py</code></td></tr>
+</table>
+
+<p>The TAO FCN (<code>QMLERec::QMLE</code>) is simpler than OMILREC — pure Poisson likelihood, no SPE convolution, no time fit, no multi-phase. But the core structure is identical: Minuit calls a likelihood function that loops over all channels.</p>
+
+<p><strong>Reference project</strong>: <a href="https://code.ihep.ac.cn/neutrino-physics/dr-sai-juno/omilrecv2">omilrecv2</a> — JUNO OMILREC was optimized from 1525 → 189 ms/evt (8.1x).</p>
+
+<h2>2. Goal</h2>
+
+<p>Achieve <strong>≥1.5x single-thread speedup</strong> on TAO RecQMLEAlg while maintaining reconstruction quality (resolution, energy scale).</p>
+
+<h2>3. Architecture Insight</h2>
+
+<p>The hotspot is clear from code inspection:</p>
+
+<pre><code>QMLERec::QMLE(Evis, r, θ, φ)           // Called ~N times by Minuit per event
+  ├── for i in 0..8047:                 // 8048 channels
+  │     ├── v_vec.Angle(channel_vec[i]) // acos of dot product
+  │     ├── CalExpChargeHit(r, angle, vθ, Evis)
+  │     │     └── charge_template→CalExpChargeHit(r, θ_sipm, vθ)
+  │     │           └── TH3F::Interpolate(θ_sipm, r, vθ)  // ROOT histogram lookup
+  │     ├── exp_hit *= rPDE[i]
+  │     ├── exp_hit += dcr[i]
+  │     ├── Poisson: exp(-λ) + k·log(λ) - LnGamma(k+1)
+  │     └── m_Likelihood += -2·log(Pro_Qi)
+  └── return m_Likelihood</code></pre>
+
+<p>This is essentially the same pattern as omilrecv2's FCN: a Minuit-minimized loop over all channels, dominated by geometry (<code>acos</code>), histogram interpolation (<code>TH3F::Interpolate</code>), and math functions (<code>exp</code>, <code>log</code>, <code>LnGamma</code>).</p>
+
+<h2>4. The Integrated Plan: Test Bed + Refactor → FCN Unit Test</h2>
+
+<p>Instead of treating "test bed" and "refactor" as separate sequential phases, we merge them into one goal: <strong>get a fast, standalone FCN unit test working</strong>. This gives us both the test infrastructure and the refactored code structure in one pass.</p>
+
+<div class="step-box">
+<h3>Phase A — Deliverables</h3>
+<table>
+<tr><th>#</th><th>Deliverable</th><th>What it proves</th></tr>
+<tr><td>A1</td><td><strong>E2E consistency test</strong></td><td>10 events reconstructed with unmodified code match reference. Bit-identical on same binary.</td></tr>
+<tr><td>A2</td><td><strong>FCN extracted as free function</strong></td><td><code>double tao_qmle_fcn(Evis, r, θ, φ, channels, dcr, rPDE, charge_template, ...)</code> — callable without SNiPER/Minuit.</td></tr>
+<tr><td>A3</td><td><strong>FCN input fixtures</strong></td><td>Binary dump of all FCN inputs at first Minuit call for 10 events (channel positions, DCR, rPDE, hit charges, template data).</td></tr>
+<tr><td>A4</td><td><strong>FCN golden output mapping</strong></td><td>For each fixture: (Evis₀, r₀, θ₀, φ₀) → golden LL value from reference code.</td></tr>
+<tr><td>A5</td><td><strong>FCN unit test</strong></td><td>C++ test: load fixtures, call <code>tao_qmle_fcn</code>, compare LL to golden. Runs in milliseconds, no SNiPER. Tolerance ≤1e-13 relative.</td></tr>
+</table>
+</div>
+
+<h3>4.1 A1: E2E Consistency Test</h3>
+
+<p>This is the straightforward part — the omilrecv2 pattern applies directly:</p>
+
+<pre><code># Run 10 events with unmodified code → reference/ref_10evt.root
+python run.py --evtmax 10 --input ... --output reference/ref_10evt.root
+
+# Test: run again, compare all output fields
+pytest tests/test_consistency.py   # bit-identical on same binary</code></pre>
+
+<p><strong>Key output fields to validate</strong>: <code>fRecEvis</code>, <code>fRecX/Y/Z</code>, <code>fChi2</code>, <code>fEdm</code>, <code>fExpPE</code>.</p>
+
+<p><strong>Scripts needed</strong>:</p>
+<ul>
+  <li><code>scripts/build.sh</code> — build against J26.1.0 + TAOSW overlay</li>
+  <li><code>scripts/generate_reference.sh</code> — run 10 events, save output</li>
+  <li><code>scripts/run_reco.sh</code> — run reconstruction for testing</li>
+</ul>
+
+<h3>4.2 A2: Extract FCN as Free Function</h3>
+
+<p>The current FCN is <code>QMLERec::QMLE(double Evis, double vr, double vtheta, double vphi)</code> — a member function that accesses <code>this→channel_vec</code>, <code>this→dcr_list</code>, <code>this→rPDE_list</code>, <code>this→fChannelHit</code>, <code>this→bad_channel_list</code>, <code>this→charge_template_ge68</code>.</p>
+
+<p>We extract it as:</p>
+
+<pre><code>namespace tao_qmle {
+
+struct FCNInput {
+    int n_channels;                          // 8048
+    const TVector3* channel_positions;       // [n_channels]
+    const double* hit_charges;               // [n_channels] — fChannelHit
+    const float* dcr;                        // [n_channels] — dcr_list
+    const float* rpde;                       // [n_channels] — rPDE_list
+    const bool* bad_channel;                 // [n_channels]
+    ChargeTemplateData* charge_template;     // extracted 3D grid data (no ROOT TH3F*)
+    double saturation;                       // 1e5
+    double y0;                               // 4500
+    double ge_evis;                          // 0.9250
+};
+
+double compute_likelihood(double Evis, double r, double theta, double phi,
+                          const FCNInput& input);
+
+} // namespace tao_qmle</code></pre>
+
+<p><strong>Key refactoring moves</strong>:</p>
+<ol>
+  <li>Extract <code>TH3F</code> raw grid data (bin edges + content array) from <code>ChargeTemplate</code> — replace <code>TH3F::Interpolate</code> with direct arithmetic on raw arrays (just like omilrecv2 did for ROOT histograms).</li>
+  <li>Hoist <code>channel_vec[i]</code> geometry — precompute <code>channel_x/y/z</code> as flat <code>double</code> arrays (SoA).</li>
+  <li>Remove all <code>this→</code> member accesses — everything passes through <code>FCNInput</code>.</li>
+  <li>The class member <code>QMLERec::QMLE</code> becomes a thin wrapper: populate <code>FCNInput</code>, call free function.</li>
+</ol>
+
+<h3>4.3 A3: Collect FCN Input Fixtures</h3>
+
+<p>Add a data dump mode to the algorithm. When enabled, at the first Minuit call of each event, serialize all FCN inputs to binary files:</p>
+
+<pre><code>fixtures/
+├── geometry.bin        # channel positions (8048 × 3 doubles)
+├── config.bin          # saturation, y0, ge_evis, threshold, etc.
+├── template.bin        # TH3F grid: bin edges + content (extracted from ChargeTemplate)
+├── evt_0_input.bin     # hit_charges[8048], dcr[8048], rpde[8048], bad_channel[8048]
+├── evt_1_input.bin
+├── ...
+└── golden.csv          # evt_id, Evis_init, r_init, θ_init, φ_init, golden_LL</code></pre>
+
+<p><strong>Collection procedure</strong>:</p>
+<ol>
+  <li>Add <code>--dump-fcn-fixtures true</code> property to <code>QMLERec</code></li>
+  <li>In <code>VertexMinimize()</code>, before first <code>Minimize()</code> call: dump <code>FCNInput</code> to <code>TEMP/fixtures/evt_{evtID}_input.bin</code></li>
+  <li>Also record the initial parameter values and the LL at that point</li>
+  <li>Dump geometry, config, template once in <code>initialize()</code></li>
+</ol>
+
+<h3>4.4 A4: Collect FCN Golden Output</h3>
+
+<p>For each event fixture, run the <em>reference</em> (unmodified) FCN at the initial point and record the LL value. This is the golden value that all future versions must reproduce.</p>
+
+<p>We also record golden LL at a few different (Evis, r, θ, φ) points per event — not just the starting point — to better constrain the function.</p>
+
+<h3>4.5 A5: FCN Unit Test</h3>
+
+<pre><code>// tests/unit/test_fcn.cc
+#include "doctest.h"
+#include "tao_qmle_fcn.h"
+
+TEST_CASE("FCN reproduces golden LL values") {
+    tao_qmle::FCNInput input;
+    load_fixture("fixtures/geometry.bin", ...);
+    load_fixture("fixtures/config.bin", ...);
+    load_fixture("fixtures/template.bin", ...);
+    load_golden("fixtures/golden.csv");
+
+    for (auto& row : golden) {
+        load_event_fixture("fixtures/evt_" + row.evt_id + "_input.bin", input);
+        double ll = tao_qmle::compute_likelihood(row.Evis, row.r, row.theta, row.phi, input);
+        double rel_err = abs(ll - row.golden_ll) / abs(row.golden_ll);
+        CHECK(rel_err <= 1e-13);
+    }
+}</code></pre>
+
+<p>This test runs in <strong>milliseconds</strong> (no SNiPER, no Minuit, no ROOT file I/O after loading), making it a fast pre-commit gate.</p>
+
+<h2>5. Full 8-Step Plan</h2>
+
+<table>
+<tr><th>Step</th><th>What</th><th>Success Criterion</th></tr>
+<tr><td><strong>Phase A</strong><br>(Test bed + Refactor)</td>
+<td>A1–A5 above: E2E test + FCN extraction + fixtures + golden + unit test</td>
+<td>E2E bit-identical; FCN unit test passes at ≤1e-13</td></tr>
+<tr><td><strong>Step 3</strong>: Profile</td>
+<td>perf/flamegraph, phase timing, roofline</td>
+<td>Bottleneck ranking: what dominates FCN time?</td></tr>
+<tr><td><strong>Step 4</strong>: Optimize</td>
+<td>Targeted optimizations, one per commit</td>
+<td>Each commit passes FCN unit test + E2E test</td></tr>
+<tr><td><strong>Step 5</strong>: Unit test gate</td>
+<td>FCN drift check (already built in Phase A)</td>
+<td>≤1e-13 drift per commit</td></tr>
+<tr><td><strong>Step 6</strong>: Benchmark</td>
+<td>100-event wall-clock timing</td>
+<td>Speed gate: ≥5% regression → reject</td></tr>
+<tr><td><strong>Step 7</strong>: Iterate</td>
+<td>Loop 3→4→5→6 until 1.5x</td>
+<td>Progressive speedup</td></tr>
+<tr><td><strong>Step 8</strong>: Acceptance</td>
+<td>Resolution comparison on ≥1000 events</td>
+<td>No degradation</td></tr>
+</table>
+
+<h2>6. Optimization Strategies (Preview)</h2>
+
+<p>Based on code inspection, the likely hotspots and their omilrecv2-proven mitigations:</p>
+
+<table>
+<tr><th>Hotspot</th><th>Cost per FCN call</th><th>Optimization</th><th>Ref</th></tr>
+<tr><td><code>v_vec.Angle(channel_vec[i])</code></td><td>8048 × acos(dot)</td><td>Hoist geometry: compute cos_theta once, cache per trial r/θ/φ; or bulk vectorize</td><td>omilrec v1.0.3</td></tr>
+<tr><td><code>TH3F::Interpolate()</code></td><td>8048 × ROOT virtual dispatch + bin search</td><td>Extract raw grid arrays, inline trilinear interpolation</td><td>omilrec v1.0.2</td></tr>
+<tr><td><code>exp()</code>, <code>log()</code>, <code>LnGamma()</code></td><td>8048 × 3 libm calls</td><td><code>LnGamma(k+1)</code> → precomputed lookup (k is integer charge, typically 0–100); Poisson → algebraic for k=0</td><td>omilrec v1.0.8</td></tr>
+<tr><td>Loop over all 8048 channels</td><td>Full scan every FCN call</td><td>Pre-filter: skip channels with zero hit charge (k=0 simplification); partition fired/unfired</td><td>omilrec v1.0.6</td></tr>
+<tr><td><code>rPDE[i]</code>, <code>dcr[i]</code> multiplication</td><td>8048 × 2 FMAs</td><td>Precompute <code>exp_hit_init[i] = template * rPDE[i] / GeEvis</code>; only apply per-channel scaling once</td><td>omilrec v1.0.4</td></tr>
+</table>
+
+<h2>7. Repository Structure</h2>
+
+<pre><code>TAO-reconstruction-speedup/
+├── README.md
+├── PRD.md / PRD.html
+├── CLAUDE.md
+├── CMakeLists.txt
+├── RecQMLEAlg/                      # Extracted package
+│   ├── CMakeLists.txt
+│   ├── src/
+│   │   ├── QMLERec.cc/.h            #   SNiPER algorithm (thin wrappers)
+│   │   ├── ChargeTemplate.cc/.h     #   Template loader
+│   │   ├── tao_qmle_fcn.cc/.h       # ★ Free function FCN
+│   │   └── tao_qmle_serialize.cc/.h # ★ Binary fixture dump/load
+│   └── share/
+│       └── run.py
+├── tests/
+│   ├── conftest.py
+│   ├── test_consistency.py          # E2E: 10 events vs reference
+│   ├── test_memory.py               # ASan
+│   └── unit/
+│       ├── CMakeLists.txt
+│       ├── test_fcn.cc              # ★ Golden-value FCN test
+│       └── doctest.h
+├── scripts/
+│   ├── build.sh
+│   ├── benchmark.sh
+│   └── generate_reference.sh
+├── benchmarks/
+│   ├── speed.csv
+│   ├── drift.csv
+│   └── RESULTS.md
+├── reference/
+│   └── ref_10evt.root
+└── fixtures/                        # Binary FCN fixtures
+    ├── geometry.bin
+    ├── config.bin
+    ├── template.bin
+    ├── evt_0_input.bin ...
+    └── golden.csv
+</code></pre>
+
+<h2>8. Success Criteria</h2>
+
+<table>
+<tr><th>Criterion</th><th>Threshold</th></tr>
+<tr><td>Speedup</td><td>≥1.5x single-thread vs baseline</td></tr>
+<tr><td>E2E consistency</td><td>Bit-identical (or physics tolerance after algebraic changes)</td></tr>
+<tr><td>FCN unit test</td><td>≤1e-13 relative drift</td></tr>
+<tr><td>Memory safety</td><td>ASan clean</td></tr>
+<tr><td>Acceptance resolution</td><td>No degradation</td></tr>
+<tr><td>Speed gate</td><td>No commit regresses ≥5%</td></tr>
+</table>
+
+<h2>9. Key Difference from OMILREC</h2>
+
+<p>TAO's FCN is <strong>simpler</strong> than OMILREC in one critical way: it uses a pure Poisson likelihood, not the SPE-convolution model. This means:</p>
+
+<ul>
+  <li>No charge PDF histogram interpolation → one less ROOT dependency to extract</li>
+  <li>No Poisson k-loop (k=1..100) → much less compute per channel</li>
+  <li><code>LnGamma(k+1)</code> can be precomputed as a lookup table (k is integer, bounded)</li>
+  <li>The <code>k=0</code> (unfired) case simplifies to <code>exp(-λ)</code> — algebraic optimization possible</li>
+</ul>
+
+<p>This also means the <strong>relative gains from each optimization category may differ</strong> from omilrecv2. The TH3F interpolation and geometry (acos) likely dominate more, while the Poisson math overhead is smaller.</p>
+
+</body>
+</html>
