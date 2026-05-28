@@ -6,6 +6,7 @@
 #include <iostream>
 #include <fstream>
 #include <string>
+#include <algorithm>
 #include "RecQMLEAlg/Functions.h"
 
 using namespace std;
@@ -105,12 +106,12 @@ int ChargeTemplate::FindBeforeIndex(float radius, int low, int high)
 {
     if (low == high){
         if(radius < tmp_radius[low]){
-            return max(low - 1, 0);
+            return std::max(low - 1, 0);
         }else{
             return low;
         }
     }else if(high < low){
-        return max(low - 1, 0);
+        return std::max(low - 1, 0);
     }
     int mid = int((low + high)/2);
     if(radius >= tmp_radius[mid]){

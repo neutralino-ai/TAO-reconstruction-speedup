@@ -13,13 +13,38 @@ PKG(RecQMLEAlg
 )
 
 # Use pimin's taosw_latest InstallArea (has getTileCenter, etc.) instead of CVMFS.
-# The setup.sh from pimin's area puts it at the front of CMAKE_PREFIX_PATH.
-# We add its include dir and lib dir explicitly for safety.
-
 set(TAOSW_INSTALL "/scratchfs/juno/pimin01/taosw_latest/taosw/InstallArea")
 if(EXISTS ${TAOSW_INSTALL})
     target_include_directories(RecQMLEAlg BEFORE PRIVATE ${TAOSW_INSTALL}/include)
     target_link_directories(RecQMLEAlg BEFORE PRIVATE ${TAOSW_INSTALL}/lib64)
+endif()
+
+# --- QMLE FCN as a standalone static library (no SNiPER dependency) ---
+add_library(QMLEFCN STATIC
+    src/QMLEFCN.cc
+    src/ChargeTemplate.cc
+)
+target_include_directories(QMLEFCN PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${TAOSW_INSTALL}/include
+)
+find_package(ROOT REQUIRED COMPONENTS Core Hist Tree Physics RIO)
+target_link_libraries(QMLEFCN PUBLIC
+    ROOT::Core ROOT::Hist ROOT::Tree ROOT::Physics ROOT::RIO
+)
+install(TARGETS QMLEFCN ARCHIVE DESTINATION lib64)
+
+# --- Unit test for the QMLE FCN ---
+option(BUILD_TESTS "Build tests" ON)
+if(BUILD_TESTS)
+    enable_testing()
+    add_executable(test_qmle_fcn tests/test_qmle_fcn.cc)
+    target_include_directories(test_qmle_fcn PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_directories(test_qmle_fcn PRIVATE ${TAOSW_INSTALL}/lib64)
+    target_link_libraries(test_qmle_fcn QMLEFCN ROOT::Core ROOT::Hist ROOT::Tree ROOT::Physics ROOT::RIO)
+    add_test(NAME qmle_fcn COMMAND test_qmle_fcn)
+    set_tests_properties(qmle_fcn PROPERTIES
+        ENVIRONMENT "RECQMLEALGROOT=${CMAKE_CURRENT_SOURCE_DIR}")
 endif()
 
 # Install Python module that shadows CVMFS RecQMLEAlg
