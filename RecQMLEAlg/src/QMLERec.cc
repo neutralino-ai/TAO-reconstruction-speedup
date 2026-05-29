@@ -468,6 +468,22 @@ bool QMLERec::finalize()
     return true;
 }
 
+// ---------------------------------------------------------------------------
+// Poisson -2 log-likelihood helper (same as QMLEFCN.cc)
+// ---------------------------------------------------------------------------
+static inline double poissonNeg2LogL(double k, double lambda) {
+    static constexpr double LOG_1E_MINUS_16 = -36.841361487904734;
+    if (k == 0.0) {
+        return 2.0 * lambda;
+    }
+    double logP = -lambda + k * log(lambda) - TMath::LnGamma(k + 1);
+    if (!std::isfinite(logP) || logP < LOG_1E_MINUS_16) {
+        logP = LOG_1E_MINUS_16;
+    }
+    return -2.0 * logP;
+}
+
+
 double QMLERec::QMLE(
     double Evis,double vr,double vtheta,double vphi)    // vtheta=(0,PI)
 {   
@@ -482,13 +498,10 @@ double QMLERec::QMLE(
     {   
         if (bad_channel_list[i]) 
         {
-            // N_bad_channel += 1;
             continue;
         }
-        double Pro_Qi = 0.;
         int id = i;
-        double angle = v_vec.Angle(channel_vec[id]); // The angle between vertex and channel, range in（0, pi）
-       //if (angle*180/TMath::Pi()>170)continue;
+        double angle = v_vec.Angle(channel_vec[id]);
         double exp_hit = CalExpChargeHit(vr, angle*180/TMath::Pi(), vtheta*180/TMath::Pi(), Evis);
         exp_hit *= rPDE_list[i];
         exp_hit += dcr_list[i];
@@ -496,61 +509,17 @@ double QMLERec::QMLE(
             exp_hit = saturation;
         }
         
-        //////////////
         int k = int(fChannelHit[i]);
-        if (k < 0) 
-        {
-            // std::cout<< "Warning: Negative charge detected on channel " << i << ", setting k to 0." << std::endl;
-            k=0;
-        }
+        if (k < 0) k = 0;
         double lambda = exp_hit;
-        if (lambda < 1e-10) 
-        {
-            // std::cout << "Warning: Expected charge (lambda) is very small (" << lambda << ") on channel " << i << ", setting lambda to 1e-10." << std::endl;
-            lambda = 1e-10;
-        }
-        double logP = -lambda + k * log(lambda) - TMath::LnGamma(k + 1);
-        if (!std::isfinite(logP)) {
-            std::cout << "logP invalid at channel " << i << std::endl;
-            logP= -1e10; // assign a very small log-likelihood to avoid issues with non-finite values
-        }
-        Pro_Qi = exp(logP);
-
-
-        // double meas_hit = fChannelHit[i];    // measured charge on channel
-        
-        // if(meas_hit < QThreshold){ // channel does not get charge
-        //     double Poisson0 = exp(-exp_hit);
-        //     double paraTemp[3] = {1.0/sqrt(2*TMath::Pi())/S1, Q1, S1};
-        //     GausFunc->SetParameters(paraTemp);      // SPES obeys N~(Q1,S1)
-        //     double probtemp = GausFunc->Integral(0, QThreshold);
-         
-        //     Pro_Qi = Poisson0 + exp_hit * Poisson0 * probtemp; 
-            
-        // } else {    // channel has charge
-        //     double Poisson = exp(-exp_hit);
-        //     double proTemp = 0.;
-        //     double proTemp_last = 0.;
-        //     for(int k = 1; k < 1000; k++)   // 
-        //     {   
-        //         proTemp = TMath::Gaus(meas_hit, k*Q1, sqrt(k)*S1)/sqrt(2.*TMath::Pi()*k*S1*S1);   //multi-PES obeys N~(kQ1,sqrt(k)*S1) 
-        //         if(proTemp<0.0) {proTemp = probPrcs/10.;}
-        //         if(proTemp < probPrcs && proTemp_last > probPrcs) break;
-        //         proTemp_last = proTemp;
-
-        //         Poisson = Poisson * exp_hit / double(k);
-        //         Pro_Qi += Poisson*proTemp;
-        //     }       
-        // }
-
-        // Likelihood
-        if(Pro_Qi<1e-16) Pro_Qi = 1e-16;
-        m_Likelihood = m_Likelihood - 2. * log(Pro_Qi);  
-        // prob_list[i] = Pro_Qi;   
-    }    
+        if (lambda < 1e-10) lambda = 1e-10;
+        // Poisson -2 log-likelihood (fast: no exp+log round-trip)
+        m_Likelihood += poissonNeg2LogL(k, lambda);
+    }
 
     return m_Likelihood;
 }
+
 
 
 

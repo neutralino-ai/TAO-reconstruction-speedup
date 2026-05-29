@@ -237,3 +237,4 @@ class QMLERec : public AlgBase
 };
 
 #endif
+     // Note: this adds a #include dependency — must be at the end
