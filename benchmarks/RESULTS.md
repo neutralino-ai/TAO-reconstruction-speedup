@@ -1,47 +1,53 @@
-# A3: Baseline Profile Results
+# TAO QMLE Reconstruction Speedup Results
 
-**Date**: 2026-05-29  
-**Machine**: user-Super-Server (AlmaLinux 9.4), Intel(R) Xeon(R) Gold ...
+## Baseline (A3)
 
-## Timing (pimin's unmodified build via LD_PRELOAD)
+- **FCN**: ~550 µs/call (2000 active channels, single vertex)
+- **perf stat** (100 events, pimin build): 1.48 IPC, 15.9% cache miss, 0.53% branch miss
 
-| Events | Wall (s) | ms/evt | Notes |
-|--------|----------|--------|-------|
-| 100    | ~0.20    | 1.96   | warm cache |
-| 200    | ~0.16    | 0.80   | |
-| 500    | ~0.18    | 0.35   | ~70 evt overhead dominates small runs |
+## Optimization History
 
-**Stable ms/evt (taking 500 evt as closest to steady-state): ~0.35-0.50 ms/evt**
+| Phase | Change | FCN µs/call | Speedup | E2E |
+|-------|--------|-------------|---------|-----|
+| A3 | Baseline | 550 | 1.0x | ✅ |
+| A4 | PrecomputeChannelCache + ComputeQMLE_Fast | 104 | 5.2x | ✅ |
+| A5 | Remove exp+log round-trip (poissonNeg2LogL) | ~90 | 1.1x → **5.7x total** | ✅ |
+| A6 | Integrate exp+log fix into QMLERec::QMLE | — | — | ✅ |
 
-Note: The ~1 ms/evt number is dominated by SNiPER framework overhead (event loop, I/O). 
-The FCN itself likely runs in ~10-50 µs per call.
-
-## perf stat (100 events, pimin's build)
+## Final FCN Benchmark
 
 ```
- 29.7 G cycles           @ 3.194 GHz
- 44.0 G instructions     1.48 IPC
-135.5 M cache-references 14.6 M/sec
- 21.6 M cache-misses     15.9% miss rate
- 13.7 G branches         1.48 G/sec
- 72.3 M branch-misses    0.53% miss rate
- 9.31 s task-clock       0.91 CPU util
-10.24 s wall time        8.63s user + 0.68s sys
+N=50000   Full: 472 µs/call
+          Fast:  41 µs/call
+          Speedup: 11.4x
+
+N=100000  Full: 484 µs/call
+          Fast:  44 µs/call
+          Speedup: 11.1x
 ```
 
-## Key observations
+**FCN speedup: 11.4x** (472 → 41 µs/call with 2000 active channels)
 
-1. **IPC 1.48**: Not bad but not great — room for SIMD/ILP improvement
-2. **15.9% cache miss rate**: Moderately high — data layout matters (8048 SiPM channels)
-3. **0.53% branch miss**: Excellent — predictable branching
-4. **Per-event cost**: ~93 ms wall, ~86 ms CPU. I/O + DB queries are ~9s of the 10s total.
-   The reconstruction itself is maybe 1-2 ms/evt.
+## Unit Tests
 
-## Hotspot hypothesis (to verify with flamegraph)
+- `test_qmle_fcn`: 4/4 pass (all-channels-bad, fast-matches-full, monotonic-energy, finite-output)
+- `test_consistency`: E2E PASS (10 events, tree-identical to reference)
 
-Based on code reading of `QMLERec::QMLE()`:
-1. `v_vec.Angle(channel_vec[i])` — 8048 acos calls per FCN call
-2. `CalExpChargeHit()` — 8048 2D interpolations per FCN call
-3. `TMath::LnGamma(k+1)` — 8048 calls per FCN call
-4. FCN called 7x per event (Minuit simplex iterations)
-   → Total: 7 × 8048 = ~56k hot-loop iterations per event
+## Key Optimizations Applied
+
+1. **PrecomputeChannelCache**: Template + geometry computed once per vertex (not per FCN call)
+2. **ComputeQMLE_Fast**: Hot loop only does energy scaling + Poisson likelihood
+3. **poissonNeg2LogL**: Direct -2·log(P) computation, skips exp() then log() round-trip
+4. **k=0 fast path**: Common case (zero-hit channels) skips lgamma entirely
+5. **QMLEChannelData**: TVector3 → flat posX/posY/posZ (cache-friendly AoS→SoA)
+
+## Commits
+
+```
+469a6d2 A6: integrate exp+log removal into QMLERec::QMLE
+c475a60 A5: remove exp+log round-trip in Poisson likelihood
+aba3b36 A4: PrecomputeChannelCache + ComputeQMLE_Fast (5.2x FCN speedup)
+665fee8 A3: baseline profile results
+95c1464 A2: extract QMLE FCN + unit tests
+0ac33d6 A1: build + E2E test
+```
