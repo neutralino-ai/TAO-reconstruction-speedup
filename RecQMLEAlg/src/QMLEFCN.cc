@@ -7,6 +7,8 @@
 #define M_PI 3.14159265358979323846
 #endif
 
+static constexpr double LOG_1E_MINUS_16 = -36.841361487904734;  // log(1e-16)
+
 void PrecomputeChannelCache(const QMLEInput& input,
                             double vr, double vtheta,
                             QMLEPerChannelCache& cache)
@@ -43,6 +45,23 @@ void PrecomputeChannelCache(const QMLEInput& input,
     cache.nActive = n;
 }
 
+// ---------------------------------------------------------------------------
+// Poisson log-likelihood helper (inlined by compiler)
+// Returns -2 ln P(k|λ), skipping the exp+log round-trip.
+// ---------------------------------------------------------------------------
+static inline double poissonNeg2LogL(double k, double lambda) {
+    // log P(k|λ) = k·log(λ) - λ - log Γ(k+1)
+    // We want -2·logP, clamped at -2·log(1e-16) ≈ 73.68
+    if (k == 0.0) {
+        // For k=0: log P = -λ, so -2logP = 2λ
+        return 2.0 * lambda;
+    }
+    double logP = -lambda + k * std::log(lambda) - std::lgamma(k + 1.0);
+    if (!std::isfinite(logP)) logP = LOG_1E_MINUS_16;
+    if (logP < LOG_1E_MINUS_16) logP = LOG_1E_MINUS_16;
+    return -2.0 * logP;
+}
+
 double ComputeQMLE_Fast(const QMLEInput& input,
                         const QMLEPerChannelCache& cache,
                         double Evis, double vphi)
@@ -59,11 +78,7 @@ double ComputeQMLE_Fast(const QMLEInput& input,
 
         double k = input.fChannelHit[i];
         if (k < 0) k = 0;
-        double logP = -exp_hit + k * std::log(exp_hit) - std::lgamma(k + 1);
-        if (!std::isfinite(logP)) logP = -1e10;
-        double Prob = std::exp(logP);
-        if (Prob < 1e-16) Prob = 1e-16;
-        likelihood -= 2.0 * std::log(Prob);
+        likelihood += poissonNeg2LogL(k, exp_hit);
     }
     return likelihood;
 }
@@ -95,11 +110,7 @@ double ComputeQMLE(const QMLEInput& input,
 
         double k = input.fChannelHit[i];
         if (k < 0) k = 0;
-        double logP = -exp_hit + k * std::log(exp_hit) - std::lgamma(k + 1);
-        if (!std::isfinite(logP)) logP = -1e10;
-        double Prob = std::exp(logP);
-        if (Prob < 1e-16) Prob = 1e-16;
-        likelihood -= 2.0 * std::log(Prob);
+        likelihood += poissonNeg2LogL(k, exp_hit);
     }
     return likelihood;
 }
