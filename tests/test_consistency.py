@@ -1,128 +1,79 @@
 #!/usr/bin/env python3
 """
-E2E Consistency Test for TAO QMLE Reconstruction.
+E2E Consistency — validates against ORIGINAL pimin golden reference.
 
-Usage:
-    python tests/test_consistency.py [--evtmax 10] [--generate-only]
+GOLDEN: reference/ref_5evt.root (pimin's script, 2025-05-28, NEVER regenerate)
 """
-
-import os, sys, subprocess, tempfile, hashlib, argparse, shlex
+import os, sys, subprocess, shlex, tempfile
 from pathlib import Path
 
 PROJ = Path(__file__).resolve().parent.parent
-ENV_SH = str(PROJ / 'scripts/env.sh')
+GOLDEN = str(PROJ / "reference/ref_5evt.root")
+ESD_DIR = "/eos/juno/tao-reprod/TaoPP26A/mix_stream/00001000/00001400_CalibData/1427"
+ESD_PATTERN = ".001_T25"
 
-def sh(cmd: str, timeout: int = 300) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        [ENV_SH, 'bash', '-c', cmd],
-        capture_output=True, text=True, timeout=timeout
-    )
+def sh(cmd, timeout=180):
+    script = (
+        'source /cvmfs/juno.ihep.ac.cn/el9_amd64_gcc11/Release/J26.1.0/setup.sh 2>/dev/null\n'
+        'source /scratchfs/juno/pimin01/taosw_latest/taosw/setup.sh 2>/dev/null\n' + cmd)
+    return subprocess.run(['bash','-c',script], capture_output=True, text=True, timeout=timeout)
 
-def eos_list(dirpath: str) -> list:
-    r = sh(f'eos ls {shlex.quote(dirpath)}')
-    lines = r.stdout.strip().split('\n')
-    # Filter setup banner
-    lines = [l for l in lines if l.strip() and 'Setup Official' not in l]
-    return lines
+def eos_ls(d):
+    r = sh(f'eos ls {shlex.quote(d)}')
+    return [l.strip() for l in r.stdout.split('\n') if l.strip() and 'Setup' not in l]
 
-def eos_cp(src: str, dstdir: str):
-    r = sh(f'eos cp {shlex.quote(src)} {shlex.quote(dstdir)}/')
-    if r.returncode != 0:
-        raise RuntimeError(f"EOS cp failed: {r.stderr}")
-
-def get_input_file():
-    input_dir = "/eos/juno/tao-reprod/TaoPP26A/mix_stream/00001000/00001400_CalibData/1427"
-    files = eos_list(input_dir)
-    esd = [f for f in files if '.001_T25' in f]
-    if not esd:
-        raise RuntimeError(f"No input file at {input_dir}")
-    tmpdir = tempfile.mkdtemp(prefix='tao_test_')
-    print(f"Fetching {esd[0]} from EOS...")
-    eos_cp(f'{input_dir}/{esd[0]}', tmpdir)
-    local = f'{tmpdir}/{esd[0]}'
-    assert os.path.exists(local)
-    return local
-
-def run_reco(evtmax: int, output: str, input_file: str) -> bool:
-    cmd = (
-        f'python {PROJ}/RecQMLEAlg/share/run.py '
-        f'--evtmax {evtmax} '
-        f'--use_true_vertex false '
-        f'--input {shlex.quote(input_file)} '
-        f'--output {shlex.quote(output)} '
-        f'--charge_template_file charge_template '
-        f'--loglevel WARN'
-    )
-    r = sh(cmd)
-    ok = r.returncode == 0 and os.path.exists(output)
-    if not ok:
-        print(f"STDERR tail: {r.stderr[-500:]}")
-    return ok
-
-def md5(path: str) -> str:
-    with open(path, 'rb') as f:
-        return hashlib.md5(f.read()).hexdigest()
+def scan_tree(rootfile):
+    macro = f'{{TFile *f=TFile::Open("{rootfile}");TTree *t=(TTree*)f->Get("Event/Rec/QMLE/CdVertexRecEvt");if(!t){{cerr<<"ERR"<<endl;return;}}t->Scan("*","","colsize=20");}}'
+    mp = f'/tmp/ts_{os.getpid()}.C'
+    with open(mp,'w') as f: f.write(macro)
+    r = sh(f'root -l -b -q {mp} 2>&1')
+    os.unlink(mp)
+    lines = [l for l in r.stdout.splitlines() if l.startswith('*')]
+    return '\n'.join(lines)
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--evtmax', type=int, default=10)
-    parser.add_argument('--reference', type=str, default=None)
-    parser.add_argument('--generate-only', action='store_true')
-    args = parser.parse_args()
+    assert os.path.exists(GOLDEN), f"GOLDEN missing: {GOLDEN}"
+    golden_txt = scan_tree(GOLDEN)
+    assert golden_txt.strip(), "Cannot read golden"
 
-    os.makedirs(PROJ / 'reference', exist_ok=True)
-    os.makedirs(PROJ / 'TEMP', exist_ok=True)
+    files = eos_ls(ESD_DIR)
+    esd = [f for f in files if ESD_PATTERN in f]
+    assert esd, f"No ESD at {ESD_DIR}"
+    tmpdir = tempfile.mkdtemp(prefix='tc_')
+    
+    # Copy ESD file
+    r = sh(f'eos cp {ESD_DIR}/{esd[0]} {tmpdir}/')
+    inp = f'{tmpdir}/{esd[0]}'
+    out = f'{tmpdir}/output.root'
 
-    ref_path = args.reference or str(PROJ / f'reference/ref_{args.evtmax}evt.root')
-    input_file = get_input_file()
+    # Minimal overlay: only our libRecQMLEAlg.so
+    overlay = f'{tmpdir}/overlay'
+    os.makedirs(f'{overlay}/lib64', exist_ok=True)
+    our_lib = f'{PROJ}/InstallArea/lib64/libRecQMLEAlg.so'
+    assert os.path.exists(our_lib), f"Build not found: {our_lib}"
+    subprocess.run(['cp', our_lib, f'{overlay}/lib64/'], check=True)
 
-    if os.path.exists(ref_path) and not args.generate_only:
-        print(f"Using existing reference: {ref_path}")
-    else:
-        print(f"Generating reference ({args.evtmax} events)...")
-        ok = run_reco(args.evtmax, ref_path, input_file)
-        assert ok, "Reference generation failed"
-        print(f"OK: {ref_path} ({os.path.getsize(ref_path)} bytes)")
+    cmd = (f'export CMAKE_PREFIX_PATH={overlay}:$CMAKE_PREFIX_PATH && '
+           f'export RECQMLEALGROOT={PROJ}/RecQMLEAlg && '
+           f'python {PROJ}/RecQMLEAlg/share/run.py '
+           f'--evtmax 5 --use_true_vertex false '
+           f'--input {shlex.quote(inp)} --output {shlex.quote(out)} '
+           f'--charge_template_file charge_template --loglevel WARN')
+    r = sh(cmd, timeout=300)
+    assert r.returncode == 0 and os.path.exists(out), f"Reco failed:\n{r.stderr[-500:]}"
 
-    if args.generate_only:
-        print("Done (generate-only).")
-        return 0
+    test_txt = scan_tree(out)
+    assert test_txt.strip(), "Cannot read test output"
 
-    test_out = str(PROJ / 'TEMP/test_output.root')
-    print(f"Running test reco ({args.evtmax} events)...")
-    ok = run_reco(args.evtmax, test_out, input_file)
-    assert ok, "Test reco failed"
-
-    rmd5, tmd5 = md5(ref_path), md5(test_out)
-    print(f"MD5: ref={rmd5[:16]}...  test={tmd5[:16]}...")
-    if rmd5 == tmd5:
-        print("PASS: bit-identical (MD5 match)")
-        return 0
-
-    print("MD5 mismatch (expected due to timestamps), comparing tree data...")
-    # Write and run ROOT macro for tree Scan
-    macro = """
-{TFile *f=TFile::Open("%s");TTree *t=(TTree*)f->Get("Event/Rec/QMLE/CdVertexRecEvt");t->Scan("*","","colsize=20");}
-"""
-    mp_r = f'/tmp/tao_ref_{os.getpid()}.C'
-    mp_t = f'/tmp/tao_test_{os.getpid()}.C'
-    with open(mp_r,'w') as f: f.write(macro % ref_path)
-    with open(mp_t,'w') as f: f.write(macro % test_out)
-    ref_txt = sh(f'root -l -b -q {mp_r} 2>&1').stdout
-    test_txt = sh(f'root -l -b -q {mp_t} 2>&1').stdout
-    os.unlink(mp_r); os.unlink(mp_t)
-
-    # Filter ROOT banner lines
-    ref_txt = '\n'.join(l for l in ref_txt.splitlines() if not l.startswith('Processing') and 'Setup' not in l)
-    test_txt = '\n'.join(l for l in test_txt.splitlines() if not l.startswith('Processing') and 'Setup' not in l)
-
-    if ref_txt == test_txt:
-        print("PASS: tree data identical")
+    if golden_txt == test_txt:
+        print("PASS: tree-identical to pimin golden reference")
         return 0
     else:
-        print("FAIL: tree data differs")
-        with open(PROJ/'TEMP/ref_scan.txt','w') as f: f.write(ref_txt)
-        with open(PROJ/'TEMP/test_scan.txt','w') as f: f.write(test_txt)
+        print("FAIL: differs from golden")
+        print(f"Golden lines: {golden_txt.count(chr(10))}, Test lines: {test_txt.count(chr(10))}")
+        gl=golden_txt.splitlines(); tl=test_txt.splitlines()
+        for i,(a,b) in enumerate(zip(gl,tl)):
+            if a!=b: print(f"  L{i}: G={a[:100]}\n       T={b[:100]}"); break
         return 1
 
 if __name__ == '__main__':
