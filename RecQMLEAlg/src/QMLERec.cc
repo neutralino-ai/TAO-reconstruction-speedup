@@ -1,6 +1,5 @@
 #include "RecQMLEAlg/QMLERec.h"
 #include "RecQMLEAlg/ChargeTemplate.h"
-#include "RecQMLEAlg/Functions.h"
 #include "RecQMLEAlg/QMLEFCN.h"
 #include "Math/Minimizer.h"
 #include "Math/GSLMinimizer.h"
@@ -9,6 +8,7 @@
 #include "Minuit2/FCNBase.h"
 #include "TVector3.h"
 #include "TMath.h"
+#include "TFile.h"
 #include "TF1.h"
 #include "TGraph2D.h"
 #include "TCanvas.h"
@@ -47,6 +47,10 @@
 #include <cstdlib>
 
 DECLARE_ALGORITHM(QMLERec);
+
+namespace {
+constexpr double kLegacyPi = 3.1415926;
+}
 
 QMLERec::QMLERec(const std::string& name)
     : AlgBase(name),evt(0),m_calibsvc(nullptr)
@@ -630,7 +634,7 @@ bool QMLERec::VertexMinimize()
         if (bad_channel_list[i]) continue;
         angle = v_vec.Angle(channel_vec[i]);  
         //if (angle*180/TMath::Pi()>170)continue;
-        exp_hit = CalExpChargeHit(fabs(fRecR), angle*180/PI, fRecTheta, fRecEvis);
+        exp_hit = CalExpChargeHit(fabs(fRecR), angle * 180.0 / kLegacyPi, fRecTheta, fRecEvis);
         exp_hit = exp_hit * rPDE_list[i];
         exp_hit += dcr_list[i];
         if(exp_hit > saturation){

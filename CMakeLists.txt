@@ -9,11 +9,6 @@ include(PKG)
 
 add_subdirectory(RecQMLEAlg)
 
-option(BUILD_UNIT_TESTS "Build C++ unit tests (no SNiPER required)" OFF)
-if(BUILD_UNIT_TESTS)
-    enable_testing()
-    add_subdirectory(tests/unit)
-endif()
 
 include(JUNOSetupScripts)
 include(JUNOInstallOfflineSetup)

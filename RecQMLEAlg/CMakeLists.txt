@@ -15,7 +15,7 @@ PKG(RecQMLEAlg
 # Use pimin's taosw_latest InstallArea (has getTileCenter, etc.) instead of CVMFS.
 set(TAOSW_INSTALL "/scratchfs/juno/pimin01/taosw_latest/taosw/InstallArea")
 if(EXISTS ${TAOSW_INSTALL})
-    target_include_directories(RecQMLEAlg BEFORE PRIVATE ${TAOSW_INSTALL}/include)
+    target_include_directories(RecQMLEAlg PRIVATE ${TAOSW_INSTALL}/include)
     target_link_directories(RecQMLEAlg BEFORE PRIVATE ${TAOSW_INSTALL}/lib64)
 endif()
 
@@ -25,11 +25,12 @@ add_library(QMLEFCN STATIC
     src/ChargeTemplate.cc
 )
 set_target_properties(QMLEFCN PROPERTIES POSITION_INDEPENDENT_CODE ON)
+find_package(ROOT REQUIRED COMPONENTS Core Hist Tree Physics RIO)
 target_include_directories(QMLEFCN PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${TAOSW_INSTALL}/include
+    ${ROOT_INCLUDE_DIRS}
 )
-find_package(ROOT REQUIRED COMPONENTS Core Hist Tree Physics RIO)
 target_link_libraries(QMLEFCN PUBLIC
     ROOT::Core ROOT::Hist ROOT::Tree ROOT::Physics ROOT::RIO
 )
@@ -46,7 +47,8 @@ if(BUILD_TESTS)
     target_link_libraries(test_qmle_fcn QMLEFCN ROOT::Core ROOT::Hist ROOT::Tree ROOT::Physics ROOT::RIO)
     add_test(NAME qmle_fcn COMMAND test_qmle_fcn)
     set_tests_properties(qmle_fcn PROPERTIES
-        ENVIRONMENT "RECQMLEALGROOT=${CMAKE_CURRENT_SOURCE_DIR}")
+        ENVIRONMENT "RECQMLEALGROOT=${CMAKE_CURRENT_SOURCE_DIR}"
+        WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
 endif()
 
 # Install Python module that shadows CVMFS RecQMLEAlg
