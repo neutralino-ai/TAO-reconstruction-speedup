@@ -1,41 +1,61 @@
 # TAO Reconstruction Speedup
 
-Optimize TAO QMLE reconstruction algorithm for speed.
+Optimize TAO QMLE reconstruction algorithm for speed while preserving agreement with the pimin baseline.
 
-**Reference project**: [omilrecv2](https://code.ihep.ac.cn/neutrino-physics/dr-sai-juno/omilrecv2) — JUNO OMILREC was optimized from 1525 → 189 ms/evt (8.1x).
+**Current release**: `v0.1.0` — Step 1 test bed complete.
 
 ## Build
 
 ```bash
-source /cvmfs/juno.ihep.ac.cn/el9_amd64_gcc11/Release/J26.1.0/setup.sh
+cd /cvmfs/juno.ihep.ac.cn/el9_amd64_gcc11/Release/J26.1.0
+source setup.sh
+cd /path/to/TAO-reconstruction-speedup
 source /scratchfs/juno/pimin01/taosw_latest/taosw/setup.sh
-bash scripts/build.sh
-source InstallArea/setup.sh
+bash scripts/build.sh Release
+```
+
+Build outputs:
+
+```text
+InstallArea/lib64/libRecQMLEAlg.so
+InstallArea/lib64/libQMLEFCN.a
+build/bin/test_qmle_fcn.exe
 ```
 
 ## Test
 
 ```bash
-# E2E consistency test (10 events vs reference)
-python tests/test_consistency.py --evtmax 10
+# FCN fixture golden test
+export RECQMLEALGROOT=$PWD/RecQMLEAlg
+./build/bin/test_qmle_fcn.exe
 
-# Generate/update reference
-python tests/test_consistency.py --evtmax 10 --generate-only
+# E2E consistency test: 5 events vs pimin golden reference
+python tests/test_consistency.py
 ```
 
-## Benchmark
+References:
+
+```text
+FCN fixture: fixtures/fcn_evt0.txt
+FCN golden:  22551.821885859372
+E2E golden:  reference/ref_5evt.root
+```
+
+## Benchmark / Profile
 
 ```bash
-bash scripts/benchmark.sh [N=100]
+bash scripts/benchmark.sh [N_TOTAL=110]
+bash scripts/profile.sh [N_FCN_CALLS=1000]
 ```
 
 ## Project Structure
 
-```
-├── RecQMLEAlg/        # SNiPER algorithm (copy of pimin's RecQMLEAlg)
-├── tests/             # Python tests
-├── scripts/           # Build, benchmark, env
+```text
+├── RecQMLEAlg/        # SNiPER algorithm and standalone QMLE FCN library
+├── tests/             # Python E2E consistency test
+├── fixtures/          # FCN golden fixture
+├── scripts/           # Build, benchmark, profile, fixture capture helpers
 ├── benchmarks/        # speed.csv, RESULTS.md
-├── reference/         # ref_10evt.root
-└── docs/              # PRD, plans
+├── reference/         # ignored locally; contains ref_5evt.root golden reference
+└── docs/              # PRD
 ```

@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Capture a valid QMLE FCN fixture from the instrumented RecQMLEAlg build."""
 
-import os
 import subprocess
 from pathlib import Path
 

@@ -60,6 +60,7 @@ mkdir -p "$OVERLAY/lib64"
 cp "$PROJ/InstallArea/lib64/libRecQMLEAlg.so" "$OVERLAY/lib64/"
 START=$(date +%s.%N)
 CMAKE_PREFIX_PATH="$OVERLAY:$CMAKE_PREFIX_PATH" \
+    LD_LIBRARY_PATH="$OVERLAY/lib64:$LD_LIBRARY_PATH" \
     python "$PROJ/RecQMLEAlg/share/run.py" \
     --evtmax $N_TOTAL --use_true_vertex false \
     --input "$INPUT" --output /tmp/bench_ours.root \

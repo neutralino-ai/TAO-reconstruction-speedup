@@ -17,7 +17,9 @@ N_FCN_CALLS="${1:-1000}"
 
 source /cvmfs/juno.ihep.ac.cn/el9_amd64_gcc11/Release/J26.1.0/setup.sh 2>/dev/null
 source /scratchfs/juno/pimin01/taosw_latest/taosw/setup.sh 2>/dev/null
-source "$PROJ/InstallArea/setup.sh" 2>/dev/null || true
+export CMAKE_PREFIX_PATH="$PROJ/InstallArea:${CMAKE_PREFIX_PATH:-}"
+export LD_LIBRARY_PATH="$PROJ/InstallArea/lib64:${LD_LIBRARY_PATH:-}"
+export RECQMLEALGROOT="$PROJ/RecQMLEAlg"
 
 DATE=$(date +%Y%m%d_%H%M)
 mkdir -p "$PROJ/benchmarks"
@@ -57,10 +59,9 @@ int main(int argc, char** argv) {
     // Enable first 1000 channels with some data
     for (int i = 0; i < 1000; ++i) {
         inp.channels[i].bad = false;
-        inp.channels[i].pos = TVector3(
-            900 * cos(i * 0.1),
-            900 * sin(i * 0.1),
-            200.0);
+        inp.channels[i].posX = 900 * cos(i * 0.1);
+        inp.channels[i].posY = 900 * sin(i * 0.1);
+        inp.channels[i].posZ = 200.0;
         inp.channels[i].rPDE = 0.8;
         inp.channels[i].dcr = 0.001;
         inp.fChannelHit[i] = (i % 5 == 0) ? 0 : (i % 3) * 1.5;
@@ -128,7 +129,8 @@ bash "$PROJ/scripts/env.sh" bash -c "
     cd $PROJ
     export RECQMLEALGROOT=$PROJ/RecQMLEAlg
     export JUNOTOP=/cvmfs/juno.ihep.ac.cn/el9_amd64_gcc11/Release/J26.1.0
-    source InstallArea/setup.sh
+    export CMAKE_PREFIX_PATH=$PROJ/InstallArea:\$CMAKE_PREFIX_PATH
+    export LD_LIBRARY_PATH=$PROJ/InstallArea/lib64:\$LD_LIBRARY_PATH
     perf stat -e cycles,instructions,cache-references,cache-misses,branches,branch-misses,task-clock \
         python RecQMLEAlg/share/run.py \
             --evtmax 10 \
