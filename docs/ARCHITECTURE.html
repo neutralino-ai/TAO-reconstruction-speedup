@@ -1,0 +1,402 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TAO QMLE Code Architecture Review</title>
+  <style>
+    :root {
+      --bg: #0b1020;
+      --panel: #121a31;
+      --panel2: #17213b;
+      --ink: #eaf0ff;
+      --muted: #9fb0d0;
+      --blue: #5cc8ff;
+      --green: #6ee7a8;
+      --yellow: #ffd166;
+      --red: #ff6b6b;
+      --purple: #b892ff;
+      --line: rgba(255,255,255,.14);
+      --shadow: 0 20px 60px rgba(0,0,0,.35);
+      --radius: 20px;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background:
+        radial-gradient(circle at top left, rgba(92,200,255,.24), transparent 35rem),
+        radial-gradient(circle at top right, rgba(184,146,255,.22), transparent 34rem),
+        linear-gradient(180deg, #080c18, var(--bg));
+      color: var(--ink);
+      line-height: 1.55;
+    }
+    a { color: var(--blue); }
+    code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; }
+    .wrap { max-width: 1220px; margin: 0 auto; padding: 34px 24px 80px; }
+    .hero {
+      padding: 42px;
+      border: 1px solid var(--line);
+      border-radius: 30px;
+      background: linear-gradient(135deg, rgba(18,26,49,.92), rgba(23,33,59,.78));
+      box-shadow: var(--shadow);
+      position: relative;
+      overflow: hidden;
+    }
+    .hero:after {
+      content: "";
+      position: absolute;
+      inset: auto -80px -120px auto;
+      width: 420px; height: 420px;
+      background: radial-gradient(circle, rgba(110,231,168,.18), transparent 65%);
+      pointer-events: none;
+    }
+    h1 { margin: 0; font-size: clamp(2rem, 4vw, 4.2rem); line-height: 1.02; letter-spacing: -0.05em; }
+    h2 { margin: 0 0 16px; font-size: 1.8rem; letter-spacing: -0.03em; }
+    h3 { margin: 0 0 10px; font-size: 1.16rem; }
+    p { margin: 0 0 14px; color: var(--muted); }
+    .subtitle { max-width: 850px; margin-top: 18px; font-size: 1.12rem; color: #c8d6f4; }
+    .meta { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 24px; }
+    .pill {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 8px 12px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: rgba(255,255,255,.06);
+      color: #dbe7ff;
+      font-size: .92rem;
+    }
+    .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--green); box-shadow: 0 0 18px var(--green); }
+    .grid { display: grid; gap: 18px; }
+    .cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    @media (max-width: 900px) { .cols-3, .cols-2 { grid-template-columns: 1fr; } .hero { padding: 28px; } }
+    .card {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: linear-gradient(180deg, rgba(23,33,59,.84), rgba(18,26,49,.9));
+      box-shadow: 0 10px 30px rgba(0,0,0,.22);
+      padding: 22px;
+    }
+    section { margin-top: 26px; }
+    .kpi { font-size: 2rem; font-weight: 800; color: var(--ink); letter-spacing: -0.04em; }
+    .label { font-size: .86rem; color: var(--muted); text-transform: uppercase; letter-spacing: .09em; }
+    .ok { color: var(--green); }
+    .warn { color: var(--yellow); }
+    .bad { color: var(--red); }
+    .tag { display:inline-block; padding: 3px 8px; border-radius: 999px; font-size: .78rem; background: rgba(92,200,255,.12); color: #bcecff; border: 1px solid rgba(92,200,255,.25); }
+    .tag.green { background: rgba(110,231,168,.12); color: #c7ffe0; border-color: rgba(110,231,168,.25); }
+    .tag.yellow { background: rgba(255,209,102,.12); color: #ffe7a2; border-color: rgba(255,209,102,.25); }
+    .tag.red { background: rgba(255,107,107,.12); color: #ffc1c1; border-color: rgba(255,107,107,.25); }
+    .diagram {
+      padding: 24px;
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      background: rgba(0,0,0,.18);
+      overflow-x: auto;
+    }
+    .layer {
+      min-width: 860px;
+      display: grid;
+      grid-template-columns: 190px 1fr 190px;
+      align-items: center;
+      gap: 14px;
+      margin: 12px 0;
+    }
+    .layer-name { font-weight: 800; color: #fff; }
+    .lane {
+      border: 1px solid var(--line);
+      background: linear-gradient(90deg, rgba(92,200,255,.10), rgba(184,146,255,.08));
+      border-radius: 16px;
+      padding: 14px;
+    }
+    .arrow { color: var(--muted); text-align: center; font-size: 1.4rem; }
+    .flow { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+    .node {
+      padding: 12px 14px;
+      border-radius: 14px;
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,.07);
+      color: #eff5ff;
+      white-space: nowrap;
+    }
+    .chev { color: var(--blue); font-weight: 900; }
+    pre {
+      margin: 0;
+      padding: 16px;
+      border-radius: 16px;
+      background: #070b15;
+      border: 1px solid rgba(255,255,255,.10);
+      color: #dce7ff;
+      overflow-x: auto;
+      font-size: .9rem;
+    }
+    table { width: 100%; border-collapse: collapse; overflow: hidden; border-radius: 16px; }
+    th, td { padding: 12px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
+    th { text-align: left; color: #dce7ff; background: rgba(255,255,255,.06); }
+    td { color: var(--muted); }
+    tr:last-child td { border-bottom: 0; }
+    .solid-grid { display: grid; grid-template-columns: 310px 1fr; gap: 18px; align-items: center; }
+    @media (max-width: 900px) { .solid-grid { grid-template-columns: 1fr; } }
+    .scorebar { height: 10px; background: rgba(255,255,255,.08); border-radius: 999px; overflow: hidden; margin-top: 6px; }
+    .scorebar span { display:block; height:100%; border-radius:999px; background: linear-gradient(90deg, var(--blue), var(--green)); }
+    .footer { margin-top: 36px; color: var(--muted); font-size: .9rem; text-align: center; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header class="hero">
+      <h1>TAO QMLE Code Architecture Review</h1>
+      <p class="subtitle">A human-readable map of the <strong>current implementation</strong>: layers, data flow, module responsibilities, seams for testing, and design-health notes. This is intentionally not a PRD; it describes what the code is today.</p>
+      <div class="meta">
+        <span class="pill"><span class="dot"></span> Step 1 test bed complete</span>
+        <span class="pill">Release anchor: <code>v0.1.0</code></span>
+        <span class="pill">Current branch includes hygiene commit after <code>v0.1.0</code></span>
+        <span class="pill">FCN golden drift: <strong class="ok">0</strong></span>
+        <span class="pill">E2E: <strong class="ok">tree-identical</strong></span>
+      </div>
+    </header>
+
+    <section class="grid cols-3">
+      <div class="card"><div class="label">Core seam</div><div class="kpi">QMLEInput</div><p>All event-fixed inputs are packaged before calling the standalone FCN.</p></div>
+      <div class="card"><div class="label">Golden FCN</div><div class="kpi">22551.821885859372</div><p>Stored in <code>fixtures/fcn_evt0.txt</code>; checked with relative tolerance ≤ 1e-13.</p></div>
+      <div class="card"><div class="label">Golden E2E</div><div class="kpi">5 events</div><p>Output tree compared against <code>reference/ref_5evt.root</code>.</p></div>
+    </section>
+
+    <section class="card">
+      <h2>1. The architecture in one picture</h2>
+      <p>The current design splits the old monolithic reconstruction into a SNiPER-facing orchestration layer and a standalone numerical FCN layer. The key improvement is that <code>QMLERec::QMLE()</code> now adapts SNiPER state into <code>QMLEInput</code> and delegates the likelihood to <code>ComputeQMLE()</code>.</p>
+      <div class="diagram">
+        <div class="layer">
+          <div class="layer-name">External data</div>
+          <div class="lane flow">
+            <span class="node">ESD calibrated hits</span><span class="chev">→</span>
+            <span class="node">CondDB calibration</span><span class="chev">→</span>
+            <span class="node">Bad channel list</span><span class="chev">→</span>
+            <span class="node">Ge68 TH3F template</span>
+          </div>
+          <div class="arrow">feeds</div>
+        </div>
+        <div class="layer">
+          <div class="layer-name">SNiPER algorithm</div>
+          <div class="lane flow">
+            <span class="node">RecQMLEAlg module</span><span class="chev">→</span>
+            <span class="node">QMLERec::execute()</span><span class="chev">→</span>
+            <span class="node">Minuit loop</span><span class="chev">→</span>
+            <span class="node">QMLERec::QMLE()</span>
+          </div>
+          <div class="arrow">adapts</div>
+        </div>
+        <div class="layer">
+          <div class="layer-name">FCN boundary</div>
+          <div class="lane flow">
+            <span class="node">QMLEInput</span><span class="chev">+</span>
+            <span class="node">Evis, vr, vtheta, vphi</span><span class="chev">→</span>
+            <span class="node">ComputeQMLE()</span>
+          </div>
+          <div class="arrow">returns</div>
+        </div>
+        <div class="layer">
+          <div class="layer-name">Outputs</div>
+          <div class="lane flow">
+            <span class="node">FCN: -2 ln L</span><span class="chev">→</span>
+            <span class="node">best-fit x,y,z,E</span><span class="chev">→</span>
+            <span class="node">CdVertexRecEvt</span>
+          </div>
+          <div class="arrow">validated</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="grid cols-2">
+      <div class="card">
+        <h2>2. Layer separation</h2>
+        <table>
+          <tr><th>Layer</th><th>Owns</th><th>Should not own</th></tr>
+          <tr><td><span class="tag">SNiPER integration</span></td><td><code>QMLERec</code>, event loading, EDM output, Minuit setup</td><td>Likelihood math details</td></tr>
+          <tr><td><span class="tag green">FCN library</span></td><td><code>QMLEInput</code>, <code>ComputeQMLE</code>, Poisson likelihood, cache path</td><td>SNiPER, CondDB, EDM, event navigation</td></tr>
+          <tr><td><span class="tag yellow">Template access</span></td><td><code>ChargeTemplate</code>, ROOT file/TH3F interpolation</td><td>Fit orchestration</td></tr>
+          <tr><td><span class="tag">Tests</span></td><td>FCN golden fixture and E2E tree comparison</td><td>Physics implementation logic</td></tr>
+        </table>
+      </div>
+      <div class="card">
+        <h2>3. Build targets</h2>
+        <pre>RecQMLEAlg MODULE
+  └─ links QMLEFCN
+
+QMLEFCN STATIC
+  ├─ src/QMLEFCN.cc
+  └─ src/ChargeTemplate.cc
+
+build/bin/test_qmle_fcn.exe
+  └─ links QMLEFCN only, not SNiPER</pre>
+        <p style="margin-top:14px">The standalone <code>QMLEFCN</code> target is the testability seam: fast, deterministic, and independent from SNiPER event services.</p>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>4. Runtime data flow</h2>
+      <div class="flow">
+        <span class="node">CdCalibEvt channels</span><span class="chev">→</span>
+        <span class="node">fChannelHit[8048]</span><span class="chev">→</span>
+        <span class="node">rPDE / dcr / bad flags</span><span class="chev">→</span>
+        <span class="node">channel_vec geometry</span><span class="chev">→</span>
+        <span class="node">QMLEInput</span><span class="chev">→</span>
+        <span class="node">ComputeQMLE</span><span class="chev">→</span>
+        <span class="node">Minuit objective</span>
+      </div>
+      <p style="margin-top:18px">The fit parameters <code>Evis</code>, <code>vr</code>, <code>vtheta</code>, and <code>vphi</code> are not outputs of the FCN. They are trial inputs supplied by Minuit. The FCN output is a single scalar likelihood value.</p>
+    </section>
+
+    <section class="grid cols-2">
+      <div class="card">
+        <h2>5. Core API snapshot</h2>
+        <pre>struct QMLEInput {
+  ChargeTemplate* charge_template_ge68;
+  double GeEvis, PDE, ESF, saturation;
+  double fChannelHit[8048];
+  std::vector&lt;QMLEChannelData&gt; channels;
+};
+
+double ComputeQMLE(
+  const QMLEInput& input,
+  double Evis,
+  double vr,
+  double vtheta,
+  double vphi);</pre>
+      </div>
+      <div class="card">
+        <h2>6. Charge template role</h2>
+        <p><code>ChargeTemplate</code> is a wrapper around a Ge68 ROOT template. In practice the physics lookup is the ROOT object:</p>
+        <pre>RecQMLEAlg/input/Ge68_charge_template.root
+  └─ h3_interpolation : TH3F</pre>
+        <p>For each trial vertex, it interpolates expected charge using radius, SiPM angle, and vertex polar angle.</p>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>7. Test architecture</h2>
+      <div class="grid cols-2">
+        <div>
+          <h3><span class="tag green">FCN unit/golden test</span></h3>
+          <p>Purpose: catch numerical drift at the pure FCN level.</p>
+          <pre>Input:  fixtures/fcn_evt0.txt
+Call:   ComputeQMLE(input, Evis, vr, vtheta, vphi)
+Golden: FCN=22551.821885859372
+Limit:  rel diff ≤ 1e-13</pre>
+        </div>
+        <div>
+          <h3><span class="tag green">E2E consistency test</span></h3>
+          <p>Purpose: catch full pipeline drift, including SNiPER orchestration.</p>
+          <pre>Input:  run 1427, file pattern .001_T25
+Run:    5 events
+Golden: reference/ref_5evt.root
+Check:  TTree::Scan("*") exact text match</pre>
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>8. Dependency direction</h2>
+      <p>Healthy direction is top-down: SNiPER depends on FCN, tests depend on FCN/SNiPER, but FCN does not depend on SNiPER.</p>
+      <div class="diagram">
+        <svg width="1000" height="300" viewBox="0 0 1000 300" role="img" aria-label="dependency graph">
+          <defs>
+            <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L0,6 L9,3 z" fill="#5cc8ff"/></marker>
+            <filter id="glow"><feGaussianBlur stdDeviation="3" result="coloredBlur"/><feMerge><feMergeNode in="coloredBlur"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+          </defs>
+          <rect x="35" y="55" width="220" height="80" rx="18" fill="#17213b" stroke="rgba(255,255,255,.22)"/>
+          <text x="145" y="88" text-anchor="middle" fill="#fff" font-size="18" font-weight="700">QMLERec</text>
+          <text x="145" y="113" text-anchor="middle" fill="#9fb0d0" font-size="13">SNiPER module</text>
+          <rect x="390" y="55" width="220" height="80" rx="18" fill="#123044" stroke="rgba(92,200,255,.35)"/>
+          <text x="500" y="88" text-anchor="middle" fill="#fff" font-size="18" font-weight="700">QMLEFCN</text>
+          <text x="500" y="113" text-anchor="middle" fill="#9fb0d0" font-size="13">standalone math seam</text>
+          <rect x="745" y="55" width="220" height="80" rx="18" fill="#2b2548" stroke="rgba(184,146,255,.35)"/>
+          <text x="855" y="88" text-anchor="middle" fill="#fff" font-size="18" font-weight="700">ChargeTemplate</text>
+          <text x="855" y="113" text-anchor="middle" fill="#9fb0d0" font-size="13">ROOT TH3F lookup</text>
+          <line x1="255" y1="95" x2="385" y2="95" stroke="#5cc8ff" stroke-width="3" marker-end="url(#arrow)" filter="url(#glow)"/>
+          <line x1="610" y1="95" x2="740" y2="95" stroke="#5cc8ff" stroke-width="3" marker-end="url(#arrow)" filter="url(#glow)"/>
+          <rect x="390" y="190" width="220" height="70" rx="18" fill="#173a2a" stroke="rgba(110,231,168,.35)"/>
+          <text x="500" y="220" text-anchor="middle" fill="#fff" font-size="17" font-weight="700">test_qmle_fcn</text>
+          <text x="500" y="242" text-anchor="middle" fill="#9fb0d0" font-size="13">fixture golden test</text>
+          <line x1="500" y1="190" x2="500" y2="140" stroke="#6ee7a8" stroke-width="3" marker-end="url(#arrow)"/>
+          <rect x="35" y="190" width="220" height="70" rx="18" fill="#3b2f16" stroke="rgba(255,209,102,.35)"/>
+          <text x="145" y="220" text-anchor="middle" fill="#fff" font-size="17" font-weight="700">test_consistency.py</text>
+          <text x="145" y="242" text-anchor="middle" fill="#9fb0d0" font-size="13">E2E golden test</text>
+          <line x1="145" y1="190" x2="145" y2="140" stroke="#ffd166" stroke-width="3" marker-end="url(#arrow)"/>
+        </svg>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>9. SOLID-style design health</h2>
+      <div class="solid-grid">
+        <div class="diagram" style="padding:10px">
+          <svg width="280" height="260" viewBox="0 0 280 260" role="img" aria-label="SOLID radar">
+            <polygon points="140,25 250,105 210,230 70,230 30,105" fill="rgba(255,255,255,.04)" stroke="rgba(255,255,255,.16)"/>
+            <polygon points="140,55 220,113 190,205 90,205 60,113" fill="none" stroke="rgba(255,255,255,.10)"/>
+            <polygon points="140,88 188,123 170,178 110,178 92,123" fill="none" stroke="rgba(255,255,255,.08)"/>
+            <line x1="140" y1="130" x2="140" y2="25" stroke="rgba(255,255,255,.12)"/>
+            <line x1="140" y1="130" x2="250" y2="105" stroke="rgba(255,255,255,.12)"/>
+            <line x1="140" y1="130" x2="210" y2="230" stroke="rgba(255,255,255,.12)"/>
+            <line x1="140" y1="130" x2="70" y2="230" stroke="rgba(255,255,255,.12)"/>
+            <line x1="140" y1="130" x2="30" y2="105" stroke="rgba(255,255,255,.12)"/>
+            <polygon points="140,45 228,110 185,195 92,198 58,111" fill="rgba(92,200,255,.28)" stroke="#5cc8ff" stroke-width="3"/>
+            <text x="140" y="18" fill="#eaf0ff" text-anchor="middle" font-size="14" font-weight="700">S</text>
+            <text x="266" y="108" fill="#eaf0ff" text-anchor="middle" font-size="14" font-weight="700">O</text>
+            <text x="220" y="250" fill="#eaf0ff" text-anchor="middle" font-size="14" font-weight="700">L</text>
+            <text x="60" y="250" fill="#eaf0ff" text-anchor="middle" font-size="14" font-weight="700">I</text>
+            <text x="14" y="108" fill="#eaf0ff" text-anchor="middle" font-size="14" font-weight="700">D</text>
+          </svg>
+        </div>
+        <div>
+          <table>
+            <tr><th>Principle</th><th>Score</th><th>Current reading</th></tr>
+            <tr><td>Single Responsibility</td><td>8/10<div class="scorebar"><span style="width:80%"></span></div></td><td><code>QMLEFCN</code> is focused. <code>QMLERec</code> still does many SNiPER orchestration tasks, which is expected for an algorithm class.</td></tr>
+            <tr><td>Open/Closed</td><td>7/10<div class="scorebar"><span style="width:70%"></span></div></td><td>The FCN seam allows optimization variants without rewriting E2E code. More strategy interfaces could help later.</td></tr>
+            <tr><td>Liskov</td><td>6/10<div class="scorebar"><span style="width:60%"></span></div></td><td>Little inheritance in new code; SNiPER/Minuit base classes are external constraints.</td></tr>
+            <tr><td>Interface Segregation</td><td>7/10<div class="scorebar"><span style="width:70%"></span></div></td><td><code>QMLEInput</code> is explicit but still large. Good for fixture completeness; could be decomposed later.</td></tr>
+            <tr><td>Dependency Inversion</td><td>7/10<div class="scorebar"><span style="width:70%"></span></div></td><td>FCN avoids SNiPER dependency. It still directly depends on <code>ChargeTemplate</code>/ROOT interpolation.</td></tr>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section class="grid cols-2">
+      <div class="card">
+        <h2>10. What is clean now</h2>
+        <ul>
+          <li><span class="ok">✓</span> SNiPER path and FCN test use the same <code>ComputeQMLE()</code>.</li>
+          <li><span class="ok">✓</span> FCN fixture captures all per-channel inputs needed by the likelihood.</li>
+          <li><span class="ok">✓</span> Unit test is fast and independent of CondDB/SNiPER.</li>
+          <li><span class="ok">✓</span> E2E test protects full-pipeline behavior against pimin golden output.</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h2>11. Design debt to watch</h2>
+        <ul>
+          <li><span class="warn">!</span> <code>QMLERec</code> still owns many responsibilities: event I/O, calibration adaptation, fit setup, output, and fixture capture.</li>
+          <li><span class="warn">!</span> <code>ChargeTemplate</code> is a direct ROOT dependency inside the FCN layer.</li>
+          <li><span class="warn">!</span> <code>QMLEInput</code> is intentionally complete but large; adding sub-structs may improve clarity later.</li>
+          <li><span class="warn">!</span> <code>QMLERec::CalExpChargeHit()</code> duplicates expected-charge scaling used for output bookkeeping.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>12. Reviewer checklist</h2>
+      <table>
+        <tr><th>Question</th><th>Where to look</th><th>Expected answer</th></tr>
+        <tr><td>Does full reco call the free FCN?</td><td><code>RecQMLEAlg/src/QMLERec.cc:QMLE()</code></td><td>Yes: it builds <code>QMLEInput</code> then calls <code>ComputeQMLE()</code>.</td></tr>
+        <tr><td>Can the FCN run without SNiPER?</td><td><code>RecQMLEAlg/CMakeLists.txt</code>, <code>test_qmle_fcn.cc</code></td><td>Yes: <code>QMLEFCN</code> is a static library and the fixture test links only that plus ROOT.</td></tr>
+        <tr><td>Is there a golden numerical reference?</td><td><code>fixtures/fcn_evt0.txt</code></td><td>Yes: complete event-0 FCN input and golden scalar output.</td></tr>
+        <tr><td>Is the full pipeline protected?</td><td><code>tests/test_consistency.py</code></td><td>Yes: exact tree scan comparison against <code>ref_5evt.root</code>.</td></tr>
+      </table>
+    </section>
+
+    <div class="footer">
+      Generated as a current-state architecture review. For backlog and planned trajectory, see <code>docs/PRD.md</code> instead.
+    </div>
+  </div>
+</body>
+</html>
