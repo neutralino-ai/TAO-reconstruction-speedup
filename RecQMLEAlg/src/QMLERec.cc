@@ -1,6 +1,7 @@
 #include "RecQMLEAlg/QMLERec.h"
 #include "RecQMLEAlg/ChargeTemplate.h"
 #include "RecQMLEAlg/Functions.h"
+#include "RecQMLEAlg/QMLEFCN.h"
 #include "Math/Minimizer.h"
 #include "Math/GSLMinimizer.h"
 #include "Math/Functor.h"
@@ -42,6 +43,8 @@
 #include <iostream>
 #include <string>
 #include <fstream>
+#include <cstdio>
+#include <cstdlib>
 
 DECLARE_ALGORITHM(QMLERec);
 
@@ -468,55 +471,66 @@ bool QMLERec::finalize()
     return true;
 }
 
-// ---------------------------------------------------------------------------
-// Poisson -2 log-likelihood helper (same as QMLEFCN.cc)
-// ---------------------------------------------------------------------------
-static inline double poissonNeg2LogL(double k, double lambda) {
-    static constexpr double LOG_1E_MINUS_16 = -36.841361487904734;
-    if (k == 0.0) {
-        return 2.0 * lambda;
-    }
-    double logP = -lambda + k * log(lambda) - TMath::LnGamma(k + 1);
-    if (!std::isfinite(logP) || logP < LOG_1E_MINUS_16) {
-        logP = LOG_1E_MINUS_16;
-    }
-    return -2.0 * logP;
-}
-
-
 double QMLERec::QMLE(
     double Evis,double vr,double vtheta,double vphi)    // vtheta=(0,PI)
-{   
-    vr=fabs(vr);
-    m_Likelihood = 0.;
-    // TF1* GausFunc = new TF1("mGaus", "gaus");
-    // TF1* GausFunc = mGausFunc;
-    // double exp_dark_noise = dark_noise_prob;         // dark noise
-    TVector3 v_vec = TVector3(0, 0 ,1);
-    v_vec.SetMagThetaPhi(vr,vtheta,vphi);           // Convert spherical coordinate system to Cartesian coordinate system
-    for(int i = 0; i < CHANNELNUM; i++)
-    {   
-        if (bad_channel_list[i]) 
-        {
-            continue;
+{
+    QMLEInput input;
+    input.charge_template_ge68 = charge_template_ge68;
+    input.GeEvis = 0.9250;
+    input.PDE = PDE;
+    input.ESF = ESF;
+    input.saturation = saturation;
+    input.channels.resize(CHANNELNUM);
+
+    int active_channels = 0;
+    for (int i = 0; i < CHANNELNUM; ++i) {
+        input.fChannelHit[i] = fChannelHit[i];
+        input.channels[i].posX = channel_vec[i].X();
+        input.channels[i].posY = channel_vec[i].Y();
+        input.channels[i].posZ = channel_vec[i].Z();
+        input.channels[i].rPDE = rPDE_list[i];
+        input.channels[i].dcr = dcr_list[i];
+        input.channels[i].bad = bad_channel_list[i];
+        if (!bad_channel_list[i]) {
+            ++active_channels;
         }
-        int id = i;
-        double angle = v_vec.Angle(channel_vec[id]);
-        double exp_hit = CalExpChargeHit(vr, angle*180/TMath::Pi(), vtheta*180/TMath::Pi(), Evis);
-        exp_hit *= rPDE_list[i];
-        exp_hit += dcr_list[i];
-        if(exp_hit > saturation){
-            exp_hit = saturation;
-        }
-        
-        int k = int(fChannelHit[i]);
-        if (k < 0) k = 0;
-        double lambda = exp_hit;
-        if (lambda < 1e-10) lambda = 1e-10;
-        // Poisson -2 log-likelihood (fast: no exp+log round-trip)
-        m_Likelihood += poissonNeg2LogL(k, lambda);
     }
 
+    m_Likelihood = ComputeQMLE(input, Evis, vr, vtheta, vphi);
+
+    const char* fixture_path = std::getenv("QMLE_CAPTURE_FCN_FIXTURE");
+    static bool fixture_captured = false;
+    const bool capture_fixture = fixture_path && !fixture_captured
+        && ((active_channels > 0 && fChannelTotHit > 0.) || std::getenv("QMLE_CAPTURE_FCN_FIXTURE_DEBUG"));
+
+    if (const char* trace_path = std::getenv("QMLE_CAPTURE_FCN_TRACE")) {
+        static int trace_call = 0;
+        FILE* tf = std::fopen(trace_path, "a");
+        if (tf) {
+            std::fprintf(tf, "call=%d active_channels=%d fChannelTotHit=%.17g FCN=%.17g Evis=%.17g vr=%.17g vtheta=%.17g vphi=%.17g capture=%d\n",
+                         ++trace_call, active_channels, fChannelTotHit, m_Likelihood, Evis, std::fabs(vr), vtheta, vphi,
+                         static_cast<int>(capture_fixture));
+            std::fclose(tf);
+        }
+    }
+
+    if (capture_fixture) {
+        FILE* f = std::fopen(fixture_path, "w");
+        if (f) {
+            std::fprintf(f, "Evis=%.17g\nvr=%.17g\nvtheta=%.17g\nvphi=%.17g\n", Evis, std::fabs(vr), vtheta, vphi);
+            std::fprintf(f, "GeEvis=%.17g\nPDE=%.17g\nESF=%.17g\nsaturation=%.17g\n", input.GeEvis, input.PDE, input.ESF, input.saturation);
+            std::fprintf(f, "active_channels=%d\nfChannelTotHit=%.17g\n", active_channels, fChannelTotHit);
+            for (int i = 0; i < CHANNELNUM; ++i) {
+                std::fprintf(f, "%d %.17g %d %.17g %.17g %.17g %.17g %.17g\n",
+                             i, input.fChannelHit[i], static_cast<int>(input.channels[i].bad),
+                             input.channels[i].rPDE, input.channels[i].dcr,
+                             input.channels[i].posX, input.channels[i].posY, input.channels[i].posZ);
+            }
+            std::fprintf(f, "END_CH\nFCN=%.17g\n", m_Likelihood);
+            std::fclose(f);
+            fixture_captured = true;
+        }
+    }
     return m_Likelihood;
 }
 

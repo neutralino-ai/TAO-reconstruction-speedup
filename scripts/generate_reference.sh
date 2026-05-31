@@ -20,8 +20,10 @@ N_EVENTS="${1:-10}"
 RUN_ID="${2:-1427}"
 FILE_ID="${3:-001}"
 
-# Source our overlay
-source "${PROJ}/InstallArea/setup.sh"
+# Use our built RecQMLEAlg library as an overlay while preserving the sourced TAOSW environment.
+export CMAKE_PREFIX_PATH="${PROJ}/InstallArea:${CMAKE_PREFIX_PATH:-}"
+export LD_LIBRARY_PATH="${PROJ}/InstallArea/lib64:${LD_LIBRARY_PATH:-}"
+export RECQMLEALGROOT="${PROJ}/RecQMLEAlg"
 
 INPUT_DIR="/eos/juno/tao-reprod/TaoPP26A/mix_stream/00001000/00001400_CalibData/${RUN_ID}"
 ESD_GLOB="RUN.${RUN_ID}.*.${FILE_ID}_T25.7.1_T25.7.1.rec.root"

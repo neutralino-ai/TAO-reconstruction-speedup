@@ -1,108 +1,154 @@
-#include "RecQMLEAlg/QMLEFCN.h"
 #include "RecQMLEAlg/ChargeTemplate.h"
-#include <cstdio>
-#include <cstdlib>
-#include <cstring>
+#include "RecQMLEAlg/QMLEFCN.h"
+
 #include <cmath>
-#include <algorithm>
+#include <fstream>
+#include <iostream>
+#include <sstream>
+#include <stdexcept>
+#include <string>
 
-static int tests_run = 0, tests_passed = 0;
-#define TEST(n) do { tests_run++; printf("  %-55s ", n); } while(0)
-#define PASS() do { printf("PASS\n"); tests_passed++; } while(0)
-#define FAIL(m) do { printf("FAIL: %s\n", m); } while(0)
-#define CHK(c) do { if (!(c)) { FAIL(#c); return; } } while(0)
-#define CHK_CLOSE(a,b,eps) do { \
-    double _a=(a),_b=(b); \
-    if (fabs(_a-_b)>(eps)) { char _b[200]; snprintf(_b,200,"%.10e vs %.10e",_a,_b); FAIL(_b); return; } \
-} while(0)
+namespace {
 
-static ChargeTemplate* load_tmpl() {
-    ChargeTemplate* ct = new ChargeTemplate("Ge68_charge_template");
-    if (!ct->initialize()) { delete ct; return nullptr; }
-    return ct;
-}
+constexpr int kChannelCount = 8048;
+constexpr double kRelativeTolerance = 1e-13;
 
-static QMLEInput make_inp(ChargeTemplate* ct) {
-    QMLEInput inp; memset(&inp,0,sizeof(inp));
-    inp.channels.resize(8048);
-    inp.charge_template_ge68 = ct;
-    inp.GeEvis=0.9250; inp.PDE=1.0; inp.ESF=1.0; inp.saturation=1e5;
-    for (auto& ch : inp.channels) ch.bad = true;
-    return inp;
-}
+struct Fixture {
+    double evis = 0.0;
+    double vr = 0.0;
+    double vtheta = 0.0;
+    double vphi = 0.0;
+    double fcn = 0.0;
+    int active_channels = 0;
+    double fChannelTotHit = 0.0;
+    QMLEInput input;
+};
 
-// --- Tests ---
-
-static void test_all_bad() {
-    TEST("all channels bad → 0");
-    auto* ct = load_tmpl(); if (!ct) { printf("SKIP\n"); tests_run--; return; }
-    auto inp = make_inp(ct);
-    CHK_CLOSE(ComputeQMLE(inp,1.0,100.0,0.5,1.2), 0.0, 1e-15);
-    delete ct; PASS();
-}
-
-static void test_fast_matches_full() {
-    TEST("ComputeQMLE_Fast == ComputeQMLE (same vertex)");
-    auto* ct = load_tmpl(); if (!ct) { printf("SKIP\n"); tests_run--; return; }
-    auto inp = make_inp(ct);
-    for (int i = 0; i < 1000; ++i) {
-        inp.channels[i].bad = false;
-        double th = acos(1.0-2.0*(i+0.5)/1000.0);
-        inp.channels[i].posX = 939.515*sin(th);
-        inp.channels[i].posY = 0;
-        inp.channels[i].posZ = 939.515*cos(th);
-        inp.channels[i].rPDE = 0.8;
-        inp.channels[i].dcr = 0.001*(i%5);
-        inp.fChannelHit[i] = (i%4==0)?0:(i%3)*1.5;
+double parse_value(const std::string& line, const std::string& key)
+{
+    const std::string prefix = key + "=";
+    if (line.rfind(prefix, 0) != 0) {
+        throw std::runtime_error("expected key " + key + ", got: " + line);
     }
-    double tests[][4] = {{0.5,100,0.5,0},{1.0,300,1.0,0},{2.0,800,2.0,0},{0.8,200,0.8,0},{1.5,500,1.2,0}};
-    for (auto& t : tests) {
-        QMLEPerChannelCache cache;
-        PrecomputeChannelCache(inp, t[1], t[2], cache);
-        double r1 = ComputeQMLE(inp, t[0], t[1], t[2], t[3]);
-        double r2 = ComputeQMLE_Fast(inp, cache, t[0], t[3]);
-        CHK_CLOSE(r1, r2, 1e-10);
+    return std::stod(line.substr(prefix.size()));
+}
+
+Fixture load_fixture(const std::string& path, ChargeTemplate* charge_template)
+{
+    std::ifstream in(path);
+    if (!in.is_open()) {
+        throw std::runtime_error("failed to open fixture: " + path);
     }
-    delete ct; PASS();
-}
 
-static void test_monotonic() {
-    TEST("higher Evis → higher likelihood (worse)");
-    auto* ct = load_tmpl(); if (!ct) { printf("SKIP\n"); tests_run--; return; }
-    auto inp = make_inp(ct);
-    for (int i=0;i<500;++i){inp.channels[i].bad=false;inp.channels[i].posX=900*cos(i*0.1);inp.channels[i].posY=900*sin(i*0.1);inp.channels[i].posZ=200;inp.channels[i].rPDE=1.0;inp.channels[i].dcr=0.001;}
-    QMLEPerChannelCache cache;
-    PrecomputeChannelCache(inp, 100.0, 0.5, cache);
-    double r1=ComputeQMLE_Fast(inp,cache,0.5,0);
-    double r2=ComputeQMLE_Fast(inp,cache,1.0,0);
-    double r3=ComputeQMLE_Fast(inp,cache,2.0,0);
-    CHK(r1>0.0); CHK(r2>r1); CHK(r3>r2);
-    delete ct; PASS();
-}
+    Fixture fx;
+    fx.input.channels.resize(kChannelCount);
+    fx.input.charge_template_ge68 = charge_template;
 
-static void test_finite() {
-    TEST("grid search → all finite (fast)");
-    auto* ct = load_tmpl(); if (!ct) { printf("SKIP\n"); tests_run--; return; }
-    auto inp = make_inp(ct);
-    for (int i=0;i<1000;++i){inp.channels[i].bad=false;inp.channels[i].posX=900*cos(i*0.1);inp.channels[i].posY=900*sin(i*0.1);inp.channels[i].posZ=200;inp.channels[i].rPDE=0.8;inp.channels[i].dcr=0.001*(i%5);inp.fChannelHit[i]=(i%4==0)?0:(i%3)*1.5;}
-    double Evals[]={0.5,1.0,2.0},Rvals[]={50,300,800},Tvals[]={0.2,1.0,2.0};
-    for (double R:Rvals) for (double T:Tvals) {
-        QMLEPerChannelCache cache;
-        PrecomputeChannelCache(inp,R,T,cache);
-        for (double E:Evals) {
-            double r=ComputeQMLE_Fast(inp,cache,E,0);
-            CHK(std::isfinite(r));
+    std::string line;
+    std::getline(in, line);
+    fx.evis = parse_value(line, "Evis");
+    std::getline(in, line);
+    fx.vr = parse_value(line, "vr");
+    std::getline(in, line);
+    fx.vtheta = parse_value(line, "vtheta");
+    std::getline(in, line);
+    fx.vphi = parse_value(line, "vphi");
+    std::getline(in, line);
+    fx.input.GeEvis = parse_value(line, "GeEvis");
+    std::getline(in, line);
+    fx.input.PDE = parse_value(line, "PDE");
+    std::getline(in, line);
+    fx.input.ESF = parse_value(line, "ESF");
+    std::getline(in, line);
+    fx.input.saturation = parse_value(line, "saturation");
+    std::getline(in, line);
+    fx.active_channels = static_cast<int>(parse_value(line, "active_channels"));
+    std::getline(in, line);
+    fx.fChannelTotHit = parse_value(line, "fChannelTotHit");
+
+    int counted_active = 0;
+    double counted_hit = 0.0;
+    for (int row = 0; row < kChannelCount; ++row) {
+        if (!std::getline(in, line)) {
+            throw std::runtime_error("fixture ended while reading channel rows");
         }
+        std::istringstream ss(line);
+        int id = -1;
+        int bad = 1;
+        double hit = 0.0;
+        double rpde = 0.0;
+        double dcr = 0.0;
+        double x = 0.0;
+        double y = 0.0;
+        double z = 0.0;
+        if (!(ss >> id >> hit >> bad >> rpde >> dcr >> x >> y >> z)) {
+            throw std::runtime_error("bad channel row: " + line);
+        }
+        if (id != row) {
+            throw std::runtime_error("unexpected channel id in fixture");
+        }
+        fx.input.fChannelHit[id] = hit;
+        fx.input.channels[id].bad = bad != 0;
+        fx.input.channels[id].rPDE = rpde;
+        fx.input.channels[id].dcr = dcr;
+        fx.input.channels[id].posX = x;
+        fx.input.channels[id].posY = y;
+        fx.input.channels[id].posZ = z;
+        if (bad == 0) {
+            ++counted_active;
+        }
+        counted_hit += hit;
     }
-    delete ct; PASS();
+
+    std::getline(in, line);
+    if (line != "END_CH") {
+        throw std::runtime_error("expected END_CH, got: " + line);
+    }
+    std::getline(in, line);
+    fx.fcn = parse_value(line, "FCN");
+
+    if (counted_active != fx.active_channels) {
+        throw std::runtime_error("active channel count mismatch");
+    }
+    if (std::fabs(counted_hit - fx.fChannelTotHit) > 1e-9) {
+        throw std::runtime_error("total hit count mismatch");
+    }
+    if (fx.active_channels <= 0 || fx.fcn == 0.0) {
+        throw std::runtime_error("fixture is degenerate");
+    }
+
+    return fx;
 }
 
-int main() {
-    printf("\n=== QMLE FCN Unit Tests (with fast path) ===\n\n");
-    test_all_bad();
-    test_fast_matches_full();
-    test_monotonic();
-    test_finite();
-    printf("\n%d/%d passed\n", tests_passed, tests_run);
-    return tests_passed==tests_run?0:1;
+}  // namespace
+
+int main()
+{
+    try {
+        ChargeTemplate charge_template("Ge68_charge_template");
+        if (!charge_template.initialize()) {
+            throw std::runtime_error("failed to initialize charge template");
+        }
+
+        const Fixture fixture = load_fixture("fixtures/fcn_evt0.txt", &charge_template);
+        const double computed = ComputeQMLE(
+            fixture.input, fixture.evis, fixture.vr, fixture.vtheta, fixture.vphi);
+        const double abs_diff = std::fabs(computed - fixture.fcn);
+        const double rel_diff = abs_diff / std::fabs(fixture.fcn);
+
+        std::cout.precision(17);
+        std::cout << "fixture FCN:  " << fixture.fcn << "\n";
+        std::cout << "computed FCN: " << computed << "\n";
+        std::cout << "abs diff:     " << abs_diff << "\n";
+        std::cout << "rel diff:     " << rel_diff << "\n";
+
+        if (rel_diff > kRelativeTolerance) {
+            throw std::runtime_error("fixture FCN mismatch");
+        }
+    } catch (const std::exception& ex) {
+        std::cerr << ex.what() << "\n";
+        return 1;
+    }
+
+    return 0;
 }

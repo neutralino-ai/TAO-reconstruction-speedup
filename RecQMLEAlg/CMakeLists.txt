@@ -24,6 +24,7 @@ add_library(QMLEFCN STATIC
     src/QMLEFCN.cc
     src/ChargeTemplate.cc
 )
+set_target_properties(QMLEFCN PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(QMLEFCN PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${TAOSW_INSTALL}/include
@@ -33,6 +34,7 @@ target_link_libraries(QMLEFCN PUBLIC
     ROOT::Core ROOT::Hist ROOT::Tree ROOT::Physics ROOT::RIO
 )
 install(TARGETS QMLEFCN ARCHIVE DESTINATION lib64)
+target_link_libraries(RecQMLEAlg QMLEFCN)
 
 # --- Unit test for the QMLE FCN ---
 option(BUILD_TESTS "Build tests" ON)

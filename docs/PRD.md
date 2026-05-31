@@ -92,7 +92,7 @@ Capture from pimin's UNMODIFIED code, for event 0 (first after warmup):
 `fprintf(stderr, ...)`, build from git commit `0ac33d6`, run 1 event, capture
 stderr → `fixtures/fcn_evt0.txt`.
 
-**Status**: ❌
+**Status**: ✅
 
 ### 1.5 FCN Unit Test — No Fitting
 
@@ -112,7 +112,7 @@ This is the FCN-level counterpart to 1.3 (E2E). Together they form the test-bed:
 - 1.3: full pipeline, slow but comprehensive
 - 1.5: FCN-only, fast, catches numerical regressions
 
-**Status**: ❌ (blocked by 1.4)
+**Status**: ✅
 
 ---
 
@@ -179,8 +179,8 @@ Loop 2→3→4 until ≥1.5x.
 | 1.1 Build | ✅ |
 | 1.2 Refactor (extract FCN free function) | ✅ |
 | 1.3 E2E test | ✅ |
-| 1.4 FCN fixture (capture) | ❌ |
-| 1.5 FCN unit test (no fitting) | ❌ |
+| 1.4 FCN fixture (capture) | ✅ |
+| 1.5 FCN unit test (no fitting) | ✅ |
 | 2 Profile | ❌ |
 | 3 Optimize | ⚠️ |
 | 4 Benchmark | ❌ |

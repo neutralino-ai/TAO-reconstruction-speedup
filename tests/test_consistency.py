@@ -54,6 +54,7 @@ def main():
     subprocess.run(['cp', our_lib, f'{overlay}/lib64/'], check=True)
 
     cmd = (f'export CMAKE_PREFIX_PATH={overlay}:$CMAKE_PREFIX_PATH && '
+           f'export LD_LIBRARY_PATH={overlay}/lib64:$LD_LIBRARY_PATH && '
            f'export RECQMLEALGROOT={PROJ}/RecQMLEAlg && '
            f'python {PROJ}/RecQMLEAlg/share/run.py '
            f'--evtmax 5 --use_true_vertex false '
